@@ -14,11 +14,11 @@ limitations under the License.
 ==============================================================================*/
 
 #include "llvm/Support/Debug.h"
-#include "mlir/Dialect/StandardOps/Ops.h"  // TF:local_config_mlir
-#include "mlir/IR/Builders.h"  // TF:local_config_mlir
-#include "mlir/IR/Operation.h"  // TF:local_config_mlir
-#include "mlir/Pass/Pass.h"  // TF:local_config_mlir
-#include "mlir/Pass/PassRegistry.h"  // TF:local_config_mlir
+#include "mlir/Dialect/StandardOps/IR/Ops.h"  // from @llvm-project
+#include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_executor.h"
 
 #define DEBUG_TYPE "tf-functional-to-executor"
@@ -40,7 +40,7 @@ namespace {
 //      return %graph_results#...
 //    }
 struct FunctionalToExecutorDialectConversion
-    : public FunctionPass<FunctionalToExecutorDialectConversion> {
+    : public PassWrapper<FunctionalToExecutorDialectConversion, FunctionPass> {
   void runOnFunction() override;
 };
 }  // end anonymous namespace
@@ -75,7 +75,7 @@ void FunctionalToExecutorDialectConversion::runOnFunction() {
   builder.setInsertionPointToEnd(&graph_op.GetBody());
   auto island = builder.create<tf_executor::IslandOp>(
       loc, getFunction().getType().getResults(),
-      tf_executor::ControlType::get(&getContext()), ArrayRef<Value*>());
+      tf_executor::ControlType::get(&getContext()), ArrayRef<Value>());
   // Create Fetch.
   ValueRange to_fetch = island.getResults();
   if (to_fetch.size() != 1) {
@@ -95,7 +95,7 @@ void FunctionalToExecutorDialectConversion::runOnFunction() {
   }
 }
 
-std::unique_ptr<OpPassBase<FuncOp>>
+std::unique_ptr<OperationPass<FuncOp>>
 CreateFunctionalToExecutorDialectConversionPass() {
   return std::make_unique<FunctionalToExecutorDialectConversion>();
 }

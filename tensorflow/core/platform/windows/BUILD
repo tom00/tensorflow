@@ -3,6 +3,10 @@ load(
     "//tensorflow:tensorflow.bzl",
     "tf_copts",
 )
+load(
+    "//tensorflow/core/platform:rules_cc.bzl",
+    "cc_library",
+)
 
 package(
     default_visibility = [
@@ -20,6 +24,7 @@ cc_library(
         "//tensorflow/core/platform:env.cc",
         "//tensorflow/core/platform:file_system.cc",
         "//tensorflow/core/platform:file_system_helper.cc",
+        "//tensorflow/core/platform:ram_file_system.h",
         "//tensorflow/core/platform:threadpool.cc",
     ],
     hdrs = [
@@ -34,6 +39,7 @@ cc_library(
         "nobuilder",
     ],
     deps = [
+        ":error_windows",
         ":wide_char",
         "//tensorflow/core/lib/core:blocking_counter",
         "//tensorflow/core/lib/core:error_codes_proto_cc",
@@ -53,6 +59,7 @@ cc_library(
         "//tensorflow/core/platform:path",
         "//tensorflow/core/platform:platform_port",
         "//tensorflow/core/platform:protobuf",
+        "//tensorflow/core/platform:regexp",
         "//tensorflow/core/platform:setround",
         "//tensorflow/core/platform:status",
         "//tensorflow/core/platform:str_util",
@@ -81,6 +88,32 @@ cc_library(
 )
 
 cc_library(
+    name = "error_windows",
+    srcs = ["error_windows.cc"],
+    hdrs = ["error_windows.h"],
+    linkopts = ["-DEFAULTLIB:ws2_32.lib"],
+    tags = [
+        "manual",
+        "no_oss",
+        "nobuilder",
+    ],
+    # This code is highly windows specific and should only be used with care
+    # from this package.
+    visibility = ["//visibility:private"],
+)
+
+cc_library(
+    name = "intrinsics_port",
+    srcs = ["intrinsics_port.h"],
+    tags = [
+        "manual",
+        "no_oss",
+        "nobuilder",
+    ],
+    deps = ["//tensorflow/core/platform:types"],
+)
+
+cc_library(
     name = "load_library",
     srcs = ["load_library.cc"],
     hdrs = ["//tensorflow/core/platform:load_library.h"],
@@ -100,12 +133,14 @@ cc_library(
     name = "net",
     srcs = ["net.cc"],
     hdrs = ["//tensorflow/core/platform:net.h"],
+    linkopts = ["-DEFAULTLIB:ws2_32.lib"],
     tags = [
         "manual",
         "no_oss",
         "nobuilder",
     ],
     deps = [
+        ":error_windows",
         "//tensorflow/core/platform:error",
         "//tensorflow/core/platform:logging",
     ],
@@ -173,6 +208,7 @@ cc_library(
 
 cc_library(
     name = "subprocess",
+    srcs = ["subprocess.cc"],
     hdrs = ["//tensorflow/core/platform:subprocess.h"],
     tags = [
         "manual",
@@ -184,12 +220,15 @@ cc_library(
         "//tensorflow/core/platform",
         "//tensorflow/core/platform:logging",
         "//tensorflow/core/platform:macros",
+        "//tensorflow/core/platform:mutex",
+        "//tensorflow/core/platform:strcat",
         "//tensorflow/core/platform:types",
     ],
 )
 
 cc_library(
     name = "wide_char",
+    srcs = ["wide_char.cc"],
     hdrs = ["wide_char.h"],
     tags = [
         "manual",
@@ -198,7 +237,12 @@ cc_library(
     ],
 )
 
+filegroup(
+    name = "xla_cpu_runtime_srcs",
+    srcs = ["env_time.cc"],
+)
+
 exports_files(
-    srcs = glob(["*"]),
+    srcs = ["intrinsics_port.h"],
     visibility = ["//tensorflow/core/platform:__pkg__"],
 )

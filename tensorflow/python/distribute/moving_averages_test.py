@@ -149,6 +149,24 @@ class AssignMovingAveragesTest(test.TestCase, parameterized.TestCase):
            (2.0 * 0.25 + 0.0) / (1.0 * 0.25 + 1.0)],
           var.eval())
 
+  @combinations.generate(all_combinations_eager)
+  def testUpdateContext(self, distribution, use_function):
+    with distribution.scope():
+      var1 = variables.Variable([0.0, 0.0])
+      var2 = variables.Variable([0.0, 0.0])
+      var3 = variables.Variable([0.0, 0.0])
+
+      def update_fn(v, value):
+        v.assign_add(value)
+        moving_averages.assign_moving_average(var2, [2.0, 4.0], decay=0.25)
+        moving_averages.assign_moving_average(
+            var3, [2.0, 4.0], decay=0.25, zero_debias=False)
+
+      distribution.extended.update(var1, update_fn, ([1.0, 1.0],))
+
+      self.assertAllClose([2.0, 4.0], var2.read_value())
+      self.assertAllClose([1.5, 3.0], var3.read_value())
+
   @combinations.generate(all_combinations)
   def testAssignVariable(self, distribution):
 
@@ -173,30 +191,30 @@ class AssignMovingAveragesTest(test.TestCase, parameterized.TestCase):
 
 class ExponentialMovingAverageTest(test.TestCase, parameterized.TestCase):
 
-  def _ema_replica_fn_eager(self, w, ema):
-    ema.apply([w])
-    w.assign_sub([0.5])
-    ema.apply([w])
-    return ema.average(w)
-
   @combinations.generate(all_combinations_eager)
   def testReplicaContextEager(self, distribution, use_function):
-    if isinstance(distribution,
-                  (tpu_strategy.TPUStrategy, tpu_strategy.TPUStrategyV1)):
-      self.skipTest("b/139429499: TPUStrategy is not supported yet.")
+    if not use_function and isinstance(
+        distribution, (tpu_strategy.TPUStrategy, tpu_strategy.TPUStrategyV1)):
+      self.skipTest("TPUStrategy doesn't support pure eager execution.")
     with distribution.scope():
       w = variables.Variable([1.0],
                              name="w",
                              aggregation=variables.VariableAggregation.MEAN)
       ema = moving_averages.ExponentialMovingAverage(0.8)
 
-      def fn(w, ema):
-        return distribution.experimental_run_v2(
-            self._ema_replica_fn_eager, args=(w, ema))
+      def fn():
+
+        def _ema_replica_fn_eager():
+          ema.apply([w])
+          w.assign_sub([0.5])
+          ema.apply([w])
+          return ema.average(w)
+
+        return distribution.run(_ema_replica_fn_eager)
 
       if use_function:
         fn = def_function.function(fn)
-      ema_w = fn(w, ema)
+      ema_w = fn()
     self.assertAllClose(
         self.evaluate(distribution.experimental_local_results(ema_w))[0],
         [0.89999998])
@@ -209,12 +227,15 @@ class ExponentialMovingAverageTest(test.TestCase, parameterized.TestCase):
                              aggregation=variables.VariableAggregation.MEAN)
       ema = moving_averages.ExponentialMovingAverage(0.8)
 
-      def fn(w, ema):
-        return self._ema_replica_fn_eager(w, ema)
+      def fn():
+        ema.apply([w])
+        w.assign_sub([0.5])
+        ema.apply([w])
+        return ema.average(w)
 
       if use_function:
         fn = def_function.function(fn)
-      avg = fn(w, ema)
+      avg = fn()
     self.assertAllClose(
         self.evaluate(distribution.experimental_local_results(avg))[0],
         [0.89999998])
@@ -235,7 +256,7 @@ class ExponentialMovingAverageTest(test.TestCase, parameterized.TestCase):
       self.skipTest("b/139550827: Cannot do variable.assign in replica context "
                     "of TPUStrategy")
     with distribution.scope():
-      w_assign, w_apply, ema_w = distribution.experimental_run_v2(
+      w_assign, w_apply, ema_w = distribution.run(
           self._ema_replica_fn_graph)
     self.assertEqual(ema_w.name, "w/ExponentialMovingAverage:0")
     with self.cached_session():

@@ -27,6 +27,7 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "tensorflow/compiler/xla/primitive_util.h"
 #include "tensorflow/compiler/xla/shape_util.h"
 #include "tensorflow/compiler/xla/status_macros.h"
 #include "tensorflow/compiler/xla/types.h"
@@ -257,6 +258,7 @@ StatusOr<Shape> InferWindowOutputShape(const Shape& base_shape,
     case HloOpcode::kLog1p:
     case HloOpcode::kRsqrt:
     case HloOpcode::kSqrt:
+    case HloOpcode::kCbrt:
     case HloOpcode::kTanh:
       if (!ShapeUtil::ElementIsFloating(shape) &&
           !ShapeUtil::ElementIsComplex(shape)) {
@@ -408,7 +410,18 @@ StatusOr<Shape> InferWindowOutputShape(const Shape& base_shape,
   for (size_t i = 1; i < arg_shapes.size(); ++i) {
     new_dimensions[dimension] += arg_shapes[i]->dimensions(dimension);
   }
-  return ShapeUtil::MakeShape(element_type, new_dimensions);
+
+  Shape result = ShapeUtil::MakeShape(element_type, new_dimensions);
+
+  // Set dynamic dimensions if any input has dynamic dimension.
+  for (const Shape* shape : arg_shapes) {
+    for (int64 i = 0; i < shape->dimensions_size(); ++i) {
+      if (shape->is_dynamic_dimension(i)) {
+        result.set_dynamic_dimension(i, true);
+      }
+    }
+  }
+  return result;
 }
 
 /* static */ StatusOr<Shape> ShapeInference::InferConvertShape(
@@ -1720,9 +1733,9 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   const int64 kernel_output_features =
       rhs.dimensions(dnums.kernel_output_feature_dimension());
 
-  if (batch_group_count > 1 && kernel_output_features != batch_group_count) {
+  if (kernel_output_features % batch_group_count != 0) {
     return InvalidArgument(
-        "Expected output feature dimension size (value %d) to be equal to "
+        "Expected output feature dimension size (value %d) to be a multiple of "
         "batch group count %d; got <conv>(%s, %s)\n"
         "Dimension numbers: {%s}.",
         kernel_output_features, batch_group_count, ShapeUtil::HumanString(lhs),
@@ -1759,7 +1772,7 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
         dnums.DebugString());
   }
 
-  if (input_batch % batch_group_count > 0) {
+  if (input_batch % batch_group_count != 0) {
     return InvalidArgument(
         "Expected input batch dimension (value %d) to be divisible by "
         "batch_group_count (value %d); "
@@ -1793,6 +1806,7 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   std::vector<int64> dimensions(num_dims);
   dimensions[dnums.output_batch_dimension()] = input_batch / batch_group_count;
   dimensions[dnums.output_feature_dimension()] = kernel_output_features;
+
   for (int i = 0; i < num_spatial_dims; ++i) {
     dimensions[dnums.output_spatial_dimensions(i)] =
         window_output_shape.dimensions(i);
@@ -1843,7 +1857,7 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   switch (fft_type) {
     case FFT:
     case IFFT:
-      if (in.element_type() != C64) {
+      if (!primitive_util::IsComplexType(in.element_type())) {
         return InvalidArgument("%s requires complex input type, found %s.",
                                FftType_Name(fft_type),
                                PrimitiveType_Name(in.element_type()));
@@ -1851,8 +1865,8 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
       RET_CHECK_RANK(in);
       return in;
     case RFFT: {
-      if (in.element_type() != F32) {
-        return InvalidArgument("RFFT requires F32 input type, found %s.",
+      if (in.element_type() != F32 && in.element_type() != F64) {
+        return InvalidArgument("RFFT requires F32 or F64 input type, found %s.",
                                PrimitiveType_Name(in.element_type()));
       }
       RET_CHECK_RANK(in);
@@ -1867,7 +1881,8 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
               fft_length[i]);
         }
       }
-      Shape result = ShapeUtil::ChangeElementType(in, C64);
+      Shape result = ShapeUtil::ChangeElementType(
+          in, in.element_type() == F32 ? C64 : C128);
       // Preserve the size of zero-sized dimensions.
       if (fft_length[fft_rank - 1] != 0) {
         result.set_dimensions(result.dimensions_size() - 1,
@@ -1876,8 +1891,8 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
       return result;
     }
     case IRFFT: {
-      if (in.element_type() != C64) {
-        return InvalidArgument("IRFFT requires C64 input type, found %s.",
+      if (!primitive_util::IsComplexType(in.element_type())) {
+        return InvalidArgument("IRFFT requires complex input type, found %s.",
                                PrimitiveType_Name(in.element_type()));
       }
       RET_CHECK_RANK(in);
@@ -1986,6 +2001,17 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   return a;
 }
 
+/* static */ StatusOr<Shape> ShapeInference::InferAllGatherShape(
+    const Shape& operand_shape, int64 all_gather_dimension, int64 shard_count) {
+  TF_RET_CHECK(all_gather_dimension >= 0);
+  TF_RET_CHECK(all_gather_dimension < operand_shape.rank());
+  TF_RET_CHECK(shard_count > 0);
+  auto shape = operand_shape;
+  shape.set_dimensions(all_gather_dimension,
+                       shard_count * shape.dimensions(all_gather_dimension));
+  return shape;
+}
+
 /* static */ StatusOr<Shape> ShapeInference::InferAllReduceShape(
     absl::Span<const Shape* const> operand_shapes) {
   for (const Shape* operand_shape : operand_shapes) {
@@ -2035,7 +2061,8 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   // returns a tuple that contains N array shapes.
   TF_RET_CHECK(!operand_shapes.empty());
   for (int i = 0; i < operand_shapes.size(); i++) {
-    if (!ShapeUtil::Equal(*operand_shapes[0], *operand_shapes[i])) {
+    if (!Shape::Equal().IgnoreMemorySpaceInLayout()(*operand_shapes[0],
+                                                    *operand_shapes[i])) {
       return InvalidArgument(
           "HLO all-to-all has operands with different shapes: the 0th "
           "operand shape %s, but the %dth operand has shape %s.",
@@ -2583,7 +2610,18 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
     VLOG(2) << StrFormat("update_sizes[%d] = %d", dim, update_dim_size);
   }
 
-  return operand_shape;
+  auto result_shape = operand_shape;
+
+  // If any of the operand shape and update shape is dynamic, update the result
+  // dimension to dynamic.
+  for (int64 i = 0; i < update_shape.rank(); ++i) {
+    if (update_shape.is_dynamic_dimension(i) ||
+        operand_shape.is_dynamic_dimension(i)) {
+      result_shape.set_dynamic_dimension(i, true);
+    }
+  }
+
+  return result_shape;
 }
 
 /*static */ StatusOr<Shape> ShapeInference::InferReverseShape(
@@ -2724,7 +2762,13 @@ ShapeInference::InferDegenerateDimensionBroadcastShape(HloOpcode operation,
   std::copy(broadcast_sizes.begin(), broadcast_sizes.end(), dimensions.begin());
   std::copy(operand.dimensions().begin(), operand.dimensions().end(),
             dimensions.begin() + broadcast_sizes.size());
-  return ShapeUtil::MakeShape(operand.element_type(), dimensions);
+
+  Shape result = ShapeUtil::MakeShape(operand.element_type(), dimensions);
+  for (int64 i = 0; i < operand.dimensions_size(); ++i) {
+    result.set_dynamic_dimension(broadcast_sizes.size() + i,
+                                 operand.is_dynamic_dimension(i));
+  }
+  return result;
 }
 
 /* static */ StatusOr<Shape> ShapeInference::InferBroadcastShape(

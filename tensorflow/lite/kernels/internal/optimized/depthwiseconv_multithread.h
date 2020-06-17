@@ -123,7 +123,7 @@ inline void DepthwiseConv(const DepthwiseParams& params,
                           const TS* bias_data, const RuntimeShape& output_shape,
                           T* output_data,
                           CpuBackendContext* cpu_backend_context) {
-  gemmlowp::ScopedProfilingLabel label("DepthwiseConv");
+  ruy::profiler::ScopeLabel label("DepthwiseConv");
 
   TFLITE_DCHECK_EQ(input_shape.DimensionsCount(), 4);
   TFLITE_DCHECK_EQ(filter_shape.DimensionsCount(), 4);
@@ -132,7 +132,7 @@ inline void DepthwiseConv(const DepthwiseParams& params,
   int thread_count = HowManyConvThreads(output_shape, filter_shape);
   const int max_threads = cpu_backend_context->max_num_threads();
   thread_count = std::max(1, std::min(thread_count, max_threads));
-#ifndef TFLITE_WITH_RUY
+#ifndef TFLITE_WITH_RUY_ONLY
   // Cap the number of threads to 2 for float path to avoid regression in
   // performance (b/132294857).
   if (std::is_floating_point<T>::value) {
@@ -144,7 +144,7 @@ inline void DepthwiseConv(const DepthwiseParams& params,
   const int output_height = output_shape.Dims(1);
 
   CpuFlags cpu_flags;
-  GetCpuFlags(cpu_backend_context, &cpu_flags);
+  GetCpuFlags(&cpu_flags);
 
   if (thread_count == 1) {
     DepthwiseConvImpl(params, input_shape, input_data, filter_shape,

@@ -18,7 +18,9 @@ cc_library(
         ":calibration_logger",
         "//tensorflow/lite:framework",
         "//tensorflow/lite/c:common",
+        "//tensorflow/lite/core/api",
         "//tensorflow/lite/kernels:kernel_util",
+        "//tensorflow/lite/kernels:lstm_shared",
         "//tensorflow/lite/kernels:op_macros",
         "//tensorflow/lite/kernels/internal:kernel_utils",
         "//tensorflow/lite/kernels/internal:optimized_base",
@@ -48,6 +50,7 @@ cc_library(
         "//tensorflow/lite/kernels:kernel_util",
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/strings",
         "@flatbuffers",
     ],
 )
@@ -73,6 +76,7 @@ tf_cc_test(
         "//tensorflow/lite:framework",
         "//tensorflow/lite/kernels:builtin_ops",
         "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest",
     ],
 )
@@ -85,8 +89,11 @@ cc_library(
     deps = [
         ":calibration_common",
         "//tensorflow/lite:framework",
+        "//tensorflow/lite:minimal_logging",
+        "//tensorflow/lite:util",
         "//tensorflow/lite/core/api",
         "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/strings",
     ],
 )
 
@@ -110,6 +117,7 @@ cc_library(
         ":calibration_logger",
         "//tensorflow/lite:framework",
         "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/strings",
     ],
 )
 
@@ -119,8 +127,10 @@ cc_library(
     hdrs = ["calibration_logger.h"],
     copts = tflite_copts(),
     deps = [
+        "//tensorflow/lite:framework",
         "//tensorflow/lite:minimal_logging",
         "//tensorflow/lite/c:common",
+        "//tensorflow/lite/core/api",
     ],
 )
 

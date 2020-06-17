@@ -1133,7 +1133,7 @@ bool CopyDataFromInput(const Literal& input_literal, int64 input_start,
   auto base_case = [&](int64 axis, int64 dst_index, int64 src_index,
                        bool within_src_bounds) {
     if (axis == 0) {
-      // For IRFFT, the negavie frequencies are only needed for the sweep along
+      // For IRFFT, the negative frequencies are only needed for the sweep along
       // the X axis, which is performed last. Leave this part of the working set
       // uninitialized until then.
       const int64 length = fft_lengths[axis];
@@ -1684,7 +1684,7 @@ class OutputOffsetIndexToInputIndex {
   std::vector<int64> input_index_;
 };
 
-// Rehapes the gather indices input to have a trailing degenerate `1` dimension
+// Reshapes the gather indices input to have a trailing degenerate `1` dimension
 // if necessary.  Hands over the ownership of the newly created literal (if
 // there is one) to `reshaped_start_indices`.
 static StatusOr<std::reference_wrapper<const Literal>> ReshapedGatherIndices(
@@ -1769,7 +1769,7 @@ Status HloEvaluator::HandleGather(HloInstruction* gather) {
       //                                       output_dim_size);
       input_index_clamped[i] =
           std::min(operand_shape.dimensions(i) - output_dim_size,
-                   std::max(0LL, input_gather_index[i]));
+                   std::max(int64{0}, input_gather_index[i]));
     }
     for (int i = 0, e = input_index.size(); i < e; i++) {
       input_index[i] = input_index_clamped[i] + input_window_index[i];
@@ -1872,14 +1872,15 @@ Status HloEvaluator::HandleCopyStart(HloInstruction* copy_start) {
         "user.");
   }
 
-  // The token in index {1} is undefined, but since we can't represent undefined
-  // values using a Literal, we just use 0. This should be safe though since we
-  // ensure that the only user of a kCopyStart is a kCopyDone which "eats" the
-  // token. Also note that MakeTuple copies its arguments, so this is
-  // memory-safe.
-  const Literal token_literal = LiteralUtil::CreateR0<uint32>(0);
+  // The context in index {2} is undefined, but since we can't represent
+  // undefined values using a Literal, we just use 0. This should be safe though
+  // since we ensure that the only user of a kCopyStart is a kCopyDone which
+  // consumes the context. Also note that MakeTuple copies its arguments, so
+  // this is memory-safe.
+  const Literal context_literal = LiteralUtil::CreateR0<uint32>(0);
   evaluated_[copy_start] = LiteralUtil::MakeTuple(
-      {&GetEvaluatedLiteralFor(copy_start->operand(0)), &token_literal});
+      {&GetEvaluatedLiteralFor(copy_start->operand(0)),
+       &GetEvaluatedLiteralFor(copy_start->operand(0)), &context_literal});
   return Status::OK();
 }
 
@@ -2275,11 +2276,11 @@ static bool IsScalarAdd(HloComputation* computation) {
 // (until the reduction is completed, the output element is also used as
 // an accumulator).
 static StatusOr<bool> PerformReductionStep(
-    absl::Span<const int64> input_index, absl::Span<const int64> output_index,
+    bool is_tuple, absl::Span<const int64> input_index,
+    absl::Span<const int64> output_index,
     absl::Span<const Literal* const> input_args, absl::Span<Literal> results,
     HloComputation* computation, HloEvaluator* embedded_evaluator) {
   int num_args = results.size();
-  bool is_tuple = num_args > 1;
 
   absl::InlinedVector<Literal, 1> arg_values;
   arg_values.reserve(num_args);
@@ -2329,7 +2330,7 @@ static StatusOr<bool> PerformReductionStep(
 }
 
 static StatusOr<bool> GenerateReduceOutputElement(
-    absl::Span<const int64> output_index,
+    bool is_tuple, absl::Span<const int64> output_index,
 
     absl::Span<const Literal* const> init_values,
     absl::Span<const Literal* const> input_args, absl::Span<Literal> results,
@@ -2339,7 +2340,6 @@ static StatusOr<bool> GenerateReduceOutputElement(
     absl::Span<const int64> arg_dim_steps,
     absl::Span<const int64> arg_dim_counts,
     absl::Span<const int64> result_to_arg_index) {
-  bool is_tuple = results.size() > 1;
   bool use_fast_add = ShapeUtil::ElementIsFloating(init_values[0]->shape()) &&
                       IsScalarAdd(function) && !is_tuple;
 
@@ -2374,8 +2374,9 @@ static StatusOr<bool> GenerateReduceOutputElement(
   TF_RETURN_IF_ERROR(ShapeUtil::ForEachIndexWithStatus(
       arg_shape, base, arg_dim_counts, arg_dim_steps,
       [&](absl::Span<const int64> input_index) {
-        return PerformReductionStep(input_index, output_index, input_args,
-                                    results, function, embedded_evaluator);
+        return PerformReductionStep(is_tuple, input_index, output_index,
+                                    input_args, results, function,
+                                    embedded_evaluator);
       }));
   return true;
 }
@@ -2452,9 +2453,9 @@ Status HloEvaluator::HandleReduce(HloInstruction* instr) {
   TF_RETURN_IF_ERROR(ShapeUtil::ForEachIndexWithStatus(
       output_shape, [&](absl::Span<const int64> output_index) {
         return GenerateReduceOutputElement(
-            output_index, init_values, input_args, absl::Span<Literal>(results),
-            function, &embedded_evaluator, arg_dim_steps, arg_dim_counts,
-            result_to_arg_index);
+            is_tuple, output_index, init_values, input_args,
+            absl::Span<Literal>(results), function, &embedded_evaluator,
+            arg_dim_steps, arg_dim_counts, result_to_arg_index);
       }));
 
   if (is_tuple) {
@@ -2553,6 +2554,20 @@ std::unique_ptr<Array2D<double>> HloEvaluator::MatmulArray2D(
     const Array2D<double>& lhs, const Array2D<double>& rhs) {
   return MatmulArray2DImpl<double>(
       lhs, rhs, __xla_cpu_runtime_EigenSingleThreadedMatMulF64);
+}
+
+std::unique_ptr<Array2D<std::complex<float>>> HloEvaluator::MatmulArray2D(
+    const Array2D<std::complex<float>>& lhs,
+    const Array2D<std::complex<float>>& rhs) {
+  return MatmulArray2DImpl<std::complex<float>>(
+      lhs, rhs, __xla_cpu_runtime_EigenSingleThreadedMatMulC64);
+}
+
+std::unique_ptr<Array2D<std::complex<double>>> HloEvaluator::MatmulArray2D(
+    const Array2D<std::complex<double>>& lhs,
+    const Array2D<std::complex<double>>& rhs) {
+  return MatmulArray2DImpl<std::complex<double>>(
+      lhs, rhs, __xla_cpu_runtime_EigenSingleThreadedMatMulC128);
 }
 
 std::unique_ptr<Array2D<int32>> HloEvaluator::MatmulArray2D(

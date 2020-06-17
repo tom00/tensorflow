@@ -26,16 +26,16 @@ limitations under the License.
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/Casting.h"
-#include "mlir/IR/Attributes.h"  // TF:local_config_mlir
-#include "mlir/IR/Builders.h"  // TF:local_config_mlir
-#include "mlir/IR/Function.h"  // TF:local_config_mlir
-#include "mlir/IR/Operation.h"  // TF:local_config_mlir
-#include "mlir/IR/Types.h"  // TF:local_config_mlir
-#include "mlir/IR/Value.h"  // TF:local_config_mlir
-#include "mlir/IR/Visitors.h"  // TF:local_config_mlir
-#include "mlir/Pass/Pass.h"  // TF:local_config_mlir
-#include "mlir/Pass/PassRegistry.h"  // TF:local_config_mlir
-#include "mlir/Support/LogicalResult.h"  // TF:local_config_mlir
+#include "mlir/IR/Attributes.h"  // from @llvm-project
+#include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/Function.h"  // from @llvm-project
+#include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/IR/Types.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/IR/Visitors.h"  // from @llvm-project
+#include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/analysis/side_effect_analysis.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
@@ -53,8 +53,9 @@ constexpr char kFuncDeviceAttr[] = "tf.device";
 //
 // This pass changes the module by adding "tf.device" attribute to function
 // arguments and adding "device" attribute to TF ops.
-struct ResourceDeviceInference : public ModulePass<ResourceDeviceInference> {
-  void runOnModule() override;
+struct ResourceDeviceInference
+    : public PassWrapper<ResourceDeviceInference, OperationPass<ModuleOp>> {
+  void runOnOperation() override;
 };
 
 // A class that records each resource's device assignment in a function.
@@ -64,7 +65,7 @@ class PerFunctionResult {
 
   // Returns the recorded device assignment for a resource, if any.
   llvm::Optional<llvm::StringRef> DeviceForResource(
-      const Value* resource) const {
+      const Value resource) const {
     llvm::Optional<llvm::StringRef> result;
     if (alias_analysis_.IsUnknownResource(resource)) return result;
     for (int64_t id : alias_analysis_.GetResourceUniqueIds(resource)) {
@@ -87,7 +88,7 @@ class PerFunctionResult {
   // conflicts with an existing one, returns an error.
   //
   // If `changed` is provided, assign *changed to true if anything is modified.
-  LogicalResult AddResourceDevice(const Value* resource, llvm::StringRef device,
+  LogicalResult AddResourceDevice(const Value resource, llvm::StringRef device,
                                   bool* changed = nullptr) {
     if (alias_analysis_.IsUnknownResource(resource)) return success();
     for (int64_t id : alias_analysis_.GetResourceUniqueIds(resource)) {
@@ -108,7 +109,7 @@ class PerFunctionResult {
 };
 
 // Tries to record device assignment for a resource.
-LogicalResult AddResourceDeviceAndEmitError(const Value* resource,
+LogicalResult AddResourceDeviceAndEmitError(const Value resource,
                                             llvm::StringRef device,
                                             Operation* error_reporting_op,
                                             PerFunctionResult* result,
@@ -127,16 +128,16 @@ LogicalResult ComputeResourceDevicesInComputation(FuncOp func_op,
   OpBuilder builder(func_op);
   // Function arguments.
   for (auto arg : func_op.getArguments()) {
-    if (!mlir::getElementTypeOrSelf(arg->getType()).isa<TF::ResourceType>()) {
+    if (!mlir::getElementTypeOrSelf(arg.getType()).isa<TF::ResourceType>()) {
       continue;
     }
     auto device_attr = func_op.getArgAttrOfType<mlir::StringAttr>(
-        arg->getArgNumber(), kFuncDeviceAttr);
+        arg.getArgNumber(), kFuncDeviceAttr);
     if (!device_attr || device_attr.getValue() == "") {
       // If device_attr does not exist, try to construct it from any recorded
       // assignment.
       if (auto device = result->DeviceForResource(arg)) {
-        func_op.setArgAttr(arg->getArgNumber(), kFuncDeviceAttr,
+        func_op.setArgAttr(arg.getArgNumber(), kFuncDeviceAttr,
                            builder.getStringAttr(*device));
       }
       continue;
@@ -148,7 +149,7 @@ LogicalResult ComputeResourceDevicesInComputation(FuncOp func_op,
   }
   auto walk_res = func_op.walk([&](Operation* op) {
     if (auto var_handle = llvm::dyn_cast<TF::VarHandleOp>(op)) {
-      // Record VarHanldeOp's device attribute.
+      // Record VarHandleOp's device attribute.
       auto device_attr =
           var_handle.getAttrOfType<mlir::StringAttr>(kDeviceAttr);
       if (!device_attr || device_attr.getValue().empty()) {
@@ -160,7 +161,7 @@ LogicalResult ComputeResourceDevicesInComputation(FuncOp func_op,
     }
     if (auto identity = llvm::dyn_cast<TF::IdentityOp>(op)) {
       // Try to construct IdentityOp's attribute from recorded assignment.
-      if (!mlir::getElementTypeOrSelf(identity.output()->getType())
+      if (!mlir::getElementTypeOrSelf(identity.output().getType())
                .isa<TF::ResourceType>()) {
         return WalkResult::advance();
       }
@@ -176,7 +177,7 @@ LogicalResult ComputeResourceDevicesInComputation(FuncOp func_op,
     // Propagate and record output device assignment for other ops based on
     // existing recording. E.g., IdentityN.
     for (auto output : op->getResults()) {
-      if (!mlir::getElementTypeOrSelf(output->getType())
+      if (!mlir::getElementTypeOrSelf(output.getType())
                .isa<TF::ResourceType>()) {
         continue;
       }
@@ -190,8 +191,8 @@ LogicalResult ComputeResourceDevicesInComputation(FuncOp func_op,
   return failure(walk_res.wasInterrupted());
 }
 
-void ResourceDeviceInference::runOnModule() {
-  auto module = getModule();
+void ResourceDeviceInference::runOnOperation() {
+  auto module = getOperation();
   llvm::SmallDenseMap<Operation*, PerFunctionResult, 4> per_function_results;
   llvm::SetVector<FuncOp> worklist;
   module.walk([&](FuncOp func_op) {
@@ -212,7 +213,7 @@ void ResourceDeviceInference::runOnModule() {
         for (auto operand_and_argument :
              llvm::zip(caller_operands, callee.getArguments())) {
           if (!mlir::getElementTypeOrSelf(
-                   std::get<0>(operand_and_argument)->getType())
+                   std::get<0>(operand_and_argument).getType())
                    .isa<TF::ResourceType>()) {
             continue;
           }
@@ -265,7 +266,7 @@ void ResourceDeviceInference::runOnModule() {
 
 }  // namespace
 
-std::unique_ptr<OpPassBase<ModuleOp>> CreateResourceDeviceInferencePass() {
+std::unique_ptr<OperationPass<ModuleOp>> CreateResourceDeviceInferencePass() {
   return std::make_unique<ResourceDeviceInference>();
 }
 

@@ -151,10 +151,8 @@ def tflite_cc_shared_object(
         copts = tflite_copts(),
         linkopts = [],
         linkstatic = 1,
-        deps = [],
-        visibility = None,
         per_os_targets = False,
-        tags = None):
+        **kwargs):
     """Builds a shared object for TFLite."""
     tf_cc_shared_object(
         name = name,
@@ -162,10 +160,8 @@ def tflite_cc_shared_object(
         linkstatic = linkstatic,
         linkopts = linkopts + tflite_jni_linkopts(),
         framework_so = [],
-        deps = deps,
-        visibility = visibility,
-        tags = tags,
         per_os_targets = per_os_targets,
+        **kwargs
     )
 
 def tf_to_tflite(name, src, options, out):
@@ -255,7 +251,7 @@ def generated_test_models():
         "ceil",
         "concat",
         "constant",
-        "control_dep",
+        # "control_dep", # b/150647401
         "conv",
         "conv_relu",
         "conv_relu1",
@@ -272,8 +268,7 @@ def generated_test_models():
         "exp",
         "embedding_lookup",
         "expand_dims",
-        # TODO(b/145885576): Re-enable.
-        # "eye",
+        "eye",
         "fill",
         "floor",
         "floor_div",
@@ -302,9 +297,8 @@ def generated_test_models():
         "logical_or",
         "logical_xor",
         "lstm",
-        # TODO(b/145885576): Re-enable.
-        # "matrix_diag",
-        # "matrix_set_diag",
+        "matrix_diag",
+        "matrix_set_diag",
         "max_pool",
         "maximum",
         "mean",
@@ -332,12 +326,14 @@ def generated_test_models():
         "relu6",
         "reshape",
         "resize_bilinear",
+        "resize_nearest_neighbor",
         "resolve_constant_strided_slice",
         "reverse_sequence",
         "reverse_v2",
         "rfft2d",
         "round",
         "rsqrt",
+        "scatter_nd",
         "shape",
         "sigmoid",
         "sin",
@@ -390,8 +386,12 @@ def generated_test_models_failing(conversion_mode):
             "unidirectional_sequence_rnn",
         ]
     elif conversion_mode == "forward-compat":
-        return []
-    return []
+        return [
+            "merged_models",  # b/150647401
+        ]
+    return [
+        "merged_models",  # b/150647401
+    ]
 
 def generated_test_models_successful(conversion_mode):
     """Returns the list of successful test models.
@@ -634,7 +634,7 @@ def gen_selected_ops(name, model, namespace = "", **kwargs):
 
     Args:
       name: Name of the generated library.
-      model: TFLite model to interpret.
+      model: TFLite models to interpret, expect a list in case of multiple models.
       namespace: Namespace in which to put RegisterSelectedOps.
       **kwargs: Additional kwargs to pass to genrule.
     """
@@ -645,12 +645,17 @@ def gen_selected_ops(name, model, namespace = "", **kwargs):
     # isinstance is not supported in skylark.
     if type(model) != type([]):
         model = [model]
+
+    input_models_args = " --input_models=%s" % ",".join(
+        ["$(location %s)" % f for f in model],
+    )
+
     native.genrule(
         name = name,
         srcs = model,
         outs = [out],
-        cmd = ("$(location %s) --namespace=%s --output_registration=$(location %s) --tflite_path=%s $(SRCS)") %
-              (tool, namespace, out, tflite_path[2:]),
+        cmd = ("$(location %s) --namespace=%s --output_registration=$(location %s) --tflite_path=%s %s") %
+              (tool, namespace, out, tflite_path[2:], input_models_args),
         tools = [tool],
         **kwargs
     )
@@ -661,7 +666,7 @@ def flex_dep(target_op_sets):
     else:
         return []
 
-def gen_model_coverage_test(src, model_name, data, failure_type, tags):
+def gen_model_coverage_test(src, model_name, data, failure_type, tags, size = "medium"):
     """Generates Python test targets for testing TFLite models.
 
     Args:
@@ -680,11 +685,14 @@ def gen_model_coverage_test(src, model_name, data, failure_type, tags):
         if failure_type[i] != "none":
             args.append("--failure_type=%s" % failure_type[i])
         i = i + 1
+
+        # Avoid coverage timeouts for large/enormous tests.
+        coverage_tags = ["nozapfhahn"] if size in ["large", "enormous"] else []
         native.py_test(
             name = "model_coverage_test_%s_%s" % (model_name, target_op_sets.lower().replace(",", "_")),
             srcs = [src],
             main = src,
-            size = "large",
+            size = size,
             args = [
                 "--model_name=%s" % model_name,
                 "--target_ops=%s" % target_op_sets,
@@ -693,12 +701,34 @@ def gen_model_coverage_test(src, model_name, data, failure_type, tags):
             srcs_version = "PY2AND3",
             python_version = "PY3",
             tags = [
+                "no_gpu",  # Executing with TF GPU configurations is redundant.
                 "no_oss",
                 "no_windows",
-            ] + tags,
+            ] + tags + coverage_tags,
             deps = [
                 "//tensorflow/lite/testing/model_coverage:model_coverage_lib",
                 "//tensorflow/lite/python:lite",
                 "//tensorflow/python:client_testlib",
             ] + flex_dep(target_op_sets),
         )
+
+def if_tflite_experimental_runtime(if_eager, if_non_eager, if_none = []):
+    return select({
+        "//tensorflow/lite:tflite_experimental_runtime_eager": if_eager,
+        "//tensorflow/lite:tflite_experimental_runtime_non_eager": if_non_eager,
+        "//conditions:default": if_none,
+    })
+
+def tflite_experimental_runtime_linkopts(if_eager = [], if_non_eager = [], if_none = []):
+    return if_tflite_experimental_runtime(
+        if_eager = [
+            # "//tensorflow/lite/experimental/tf_runtime:eager_interpreter",
+            # "//tensorflow/lite/experimental/tf_runtime:eager_model",
+            # "//tensorflow/lite/experimental/tf_runtime:subgraph",
+        ] + if_eager,
+        if_non_eager = [
+            # "//tensorflow/lite/experimental/tf_runtime:interpreter",
+            # "//tensorflow/lite/experimental/tf_runtime:model",
+        ] + if_non_eager,
+        if_none = [] + if_none,
+    )

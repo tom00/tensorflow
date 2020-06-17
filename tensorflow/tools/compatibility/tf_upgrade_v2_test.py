@@ -25,7 +25,7 @@ import tempfile
 
 from absl.testing import parameterized
 import six
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 # OSS TF V2 import placeholder.
 
 from tensorflow.python.framework import test_util
@@ -117,11 +117,15 @@ class TestUpgrade(test_util.TensorFlowTestCase, parameterized.TestCase):
       visitor.private_map["tf.compat"] = ["v1", "v2"]
       traverse.traverse(tf.compat.v1, visitor)
 
-  def _upgrade(self, old_file_text, import_rename=False):
+  def _upgrade(self,
+               old_file_text,
+               import_rename=False,
+               upgrade_compat_v1_import=False):
     in_file = six.StringIO(old_file_text)
     out_file = six.StringIO()
     upgrader = ast_edits.ASTCodeUpgrader(
-        tf_upgrade_v2.TFAPIChangeSpec(import_rename))
+        tf_upgrade_v2.TFAPIChangeSpec(
+            import_rename, upgrade_compat_v1_import=upgrade_compat_v1_import))
     count, report, errors = (
         upgrader.process_opened_file("test.py", in_file,
                                      "test_out.py", out_file))
@@ -449,7 +453,7 @@ bazel-bin/tensorflow/tools/compatibility/update/generate_v2_reorders_map
       _, _, _, new_text = self._upgrade(text)
       self.assertEqual("tf.compat.v1." + ns_prefix + v + "(a, b)", new_text)
 
-  def testIntializers(self):
+  def testInitializers(self):
     initializers = [
         "zeros",
         "ones",
@@ -2215,6 +2219,30 @@ def _log_prob(self, x):
     _, _, _, new_text = self._upgrade(text, import_rename=True)
     self.assertEqual(new_text, expected_text)
 
+    import_header = ("import tensorflow.compat.v1 as tf\n"
+                     "import tensorflow.compat.v1 as tf_v1\n"
+                     "import tensorflow.compat.v2 as tf_v2\n")
+    text = import_header + old_symbol
+    expected_header = ("import tensorflow.compat.v2 as tf\n"
+                       "import tensorflow.compat.v1 as tf_v1\n"
+                       "import tensorflow.compat.v2 as tf_v2\n")
+    expected_text = expected_header + new_symbol
+    _, _, _, new_text = self._upgrade(
+        text, import_rename=True, upgrade_compat_v1_import=True)
+    self.assertEqual(new_text, expected_text)
+
+    import_header = ("import tensorflow.compat.v1 as tf\n"
+                     "import tensorflow.compat.v1 as tf_v1\n"
+                     "import tensorflow.compat.v2 as tf_v2\n")
+    text = import_header + old_symbol
+    expected_header = ("import tensorflow as tf\n"
+                       "import tensorflow.compat.v1 as tf_v1\n"
+                       "import tensorflow.compat.v2 as tf_v2\n")
+    expected_text = expected_header + new_symbol
+    _, _, _, new_text = self._upgrade(
+        text, import_rename=False, upgrade_compat_v1_import=True)
+    self.assertEqual(new_text, expected_text)
+
     import_header = "from tensorflow import foo\n"
     text = import_header + old_symbol
     expected_text = "from tensorflow.compat.v2 import foo\n" + new_symbol
@@ -2358,6 +2386,31 @@ class TestUpgradeFiles(test_util.TensorFlowTestCase):
     temp_file = tempfile.NamedTemporaryFile("w", delete=False)
     original = "tf.conj(a)\n"
     upgraded = "tf.math.conj(a)\n"
+    temp_file.write(original)
+    temp_file.close()
+    upgrader = ast_edits.ASTCodeUpgrader(tf_upgrade_v2.TFAPIChangeSpec())
+    upgrader.process_file(temp_file.name, temp_file.name)
+    self.assertAllEqual(open(temp_file.name).read(), upgraded)
+    os.unlink(temp_file.name)
+
+  def testInplaceNoOutputChangeOnErrorHandling(self):
+    """In place file should not be modified when parsing error is handled."""
+    temp_file = tempfile.NamedTemporaryFile("w", delete=False)
+    original = "print 'a' \n"
+    upgraded = "print 'a' \n"
+    temp_file.write(original)
+    temp_file.close()
+    upgrader = ast_edits.ASTCodeUpgrader(tf_upgrade_v2.TFAPIChangeSpec())
+    upgrader.process_file(
+        temp_file.name, temp_file.name, no_change_to_outfile_on_error=True)
+    self.assertAllEqual(open(temp_file.name).read(), upgraded)
+    os.unlink(temp_file.name)
+
+  def testInplaceEmptyOutputOnError(self):
+    """In place file becomes empty when parsing error is not handled."""
+    temp_file = tempfile.NamedTemporaryFile("w", delete=False)
+    original = "print 'a' \n"
+    upgraded = ""
     temp_file.write(original)
     temp_file.close()
     upgrader = ast_edits.ASTCodeUpgrader(tf_upgrade_v2.TFAPIChangeSpec())

@@ -15,10 +15,10 @@ limitations under the License.
 #ifndef TENSORFLOW_LITE_KERNELS_KERNEL_UTIL_H_
 #define TENSORFLOW_LITE_KERNELS_KERNEL_UTIL_H_
 
-#include <algorithm>
+#include <stdint.h>
+
 #include <limits>
 
-#include "flatbuffers/flatbuffers.h"
 #include "tensorflow/lite/c/builtin_op_data.h"
 #include "tensorflow/lite/c/common.h"
 
@@ -28,26 +28,25 @@ inline int NumDimensions(const TfLiteTensor* t) { return t->dims->size; }
 inline int SizeOfDimension(const TfLiteTensor* t, int dim) {
   return t->dims->data[dim];
 }
-inline const TfLiteTensor* GetInput(TfLiteContext* context,
+inline const TfLiteTensor* GetInput(const TfLiteContext* context,
                                     const TfLiteNode* node, int index) {
-  return &context
-              ->tensors[flatbuffers::EndianScalar(node->inputs->data[index])];
+  return &context->tensors[node->inputs->data[index]];
 }
+// Note: You must check if result is not null:
+// TfLiteTensor* my_tensor = GetVariableInput(context, node, kMyTensorIdx);
+// TF_LITE_ENSURE(context, my_tensor != nullptr);
 inline TfLiteTensor* GetVariableInput(TfLiteContext* context,
                                       const TfLiteNode* node, int index) {
-  TfLiteTensor* tensor =
-      &context->tensors[flatbuffers::EndianScalar(node->inputs->data[index])];
+  TfLiteTensor* tensor = &context->tensors[node->inputs->data[index]];
   return (tensor->is_variable) ? tensor : nullptr;
 }
 inline TfLiteTensor* GetOutput(TfLiteContext* context, const TfLiteNode* node,
                                int index) {
-  return &context
-              ->tensors[flatbuffers::EndianScalar(node->outputs->data[index])];
+  return &context->tensors[node->outputs->data[index]];
 }
 inline TfLiteTensor* GetTemporary(TfLiteContext* context,
                                   const TfLiteNode* node, int index) {
-  return &context->tensors[flatbuffers::EndianScalar(
-      node->temporaries->data[index])];
+  return &context->tensors[node->temporaries->data[index]];
 }
 inline const TfLiteTensor* GetIntermediates(TfLiteContext* context,
                                             const TfLiteNode* node, int index) {
@@ -74,15 +73,19 @@ inline int64_t NumElements(const TfLiteTensor* t) {
 inline const TfLiteTensor* GetOptionalInputTensor(TfLiteContext* context,
                                                   const TfLiteNode* node,
                                                   int index) {
-  const bool use_tensor = node->inputs->data[index] != kTfLiteOptionalTensor;
+  const bool use_tensor = index < node->inputs->size &&
+                          node->inputs->data[index] != kTfLiteOptionalTensor;
   if (use_tensor) {
-    return &context
-                ->tensors[flatbuffers::EndianScalar(node->inputs->data[index])];
+    return &context->tensors[node->inputs->data[index]];
   }
   return nullptr;
 }
 
 // Determines whether tensor is constant.
+// TODO(b/138199592): Introduce new query which checks for constant OR
+// persistent-read-only, which would be useful for most tensor kernels that
+// are potentially dynamic based on the input tensor value availability at the
+// time of prepare.
 inline bool IsConstantTensor(const TfLiteTensor* tensor) {
   return tensor->allocation_type == kTfLiteMmapRo;
 }
@@ -101,6 +104,14 @@ inline void SetTensorToDynamic(TfLiteTensor* tensor) {
   }
 }
 
+// Sets tensor to persistent and read-only.
+inline void SetTensorToPersistentRo(TfLiteTensor* tensor) {
+  if (tensor->allocation_type != kTfLitePersistentRo) {
+    tensor->allocation_type = kTfLitePersistentRo;
+    tensor->data.raw = nullptr;
+  }
+}
+
 // Determines whether it is a hybrid op - one that has float inputs and
 // quantized weights.
 inline bool IsHybridOp(const TfLiteTensor* input, const TfLiteTensor* weight) {
@@ -115,6 +126,13 @@ TfLiteStatus PopulateConvolutionQuantizationParams(
     const TfLiteFusedActivation& activation, int32_t* multiplier, int* shift,
     int32_t* output_activation_min, int32_t* output_activation_max,
     int32_t* per_channel_multiplier, int* per_channel_shift);
+
+TfLiteStatus PopulateConvolutionQuantizationParams(
+    TfLiteContext* context, const TfLiteTensor* input,
+    const TfLiteTensor* filter, const TfLiteTensor* bias, TfLiteTensor* output,
+    const TfLiteFusedActivation& activation, int32_t* multiplier, int* shift,
+    int32_t* output_activation_min, int32_t* output_activation_max,
+    int32_t* per_channel_multiplier, int* per_channel_shift, int num_channels);
 
 // Calculates the multiplication factor for a quantized convolution (or
 // quantized depthwise convolution) involving the given tensors. Returns an
@@ -139,12 +157,7 @@ TfLiteStatus CalculateActivationRangeQuantized(TfLiteContext* context,
                                                TfLiteTensor* output,
                                                int32_t* act_min,
                                                int32_t* act_max);
-void CalculateActivationRangeUint8(TfLiteFusedActivation activation,
-                                   TfLiteTensor* output, int32_t* act_min,
-                                   int32_t* act_max);
-void CalculateActivationRangeInt8(TfLiteFusedActivation activation,
-                                  TfLiteTensor* output, int32_t* act_min,
-                                  int32_t* act_max);
+
 // Calculates the useful range of an activation layer given its activation
 // tensor.a
 template <typename T>

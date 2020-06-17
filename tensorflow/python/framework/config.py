@@ -81,7 +81,9 @@ def set_inter_op_parallelism_threads(num_threads):
 def get_optimizer_jit():
   """Get if JIT compilation is enabled.
 
-  Note that optimizations are only applied in graph mode, (within tf.function).
+  Note that optimizations are only applied to code that is compiled into a
+  graph. In eager mode, which is the TF2 API default, that means only code that
+  is defined under a tf.function decorator.
 
   Returns:
     If JIT compilation is enabled.
@@ -92,6 +94,10 @@ def get_optimizer_jit():
 @tf_export('config.optimizer.set_jit')
 def set_optimizer_jit(enabled):
   """Set if JIT compilation is enabled.
+
+  Note that optimizations are only applied to code that is compiled into a
+  graph. In eager mode, which is the TF2 API default, that means only code that
+  is defined under a tf.function decorator.
 
   Args:
     enabled: Whether to enable JIT compilation.
@@ -494,6 +500,51 @@ def set_memory_growth(device, enable):
   context.context().set_memory_growth(device, enable)
 
 
+@tf_export('config.experimental.get_device_details')
+def get_device_details(device):
+  """Returns details about a physical devices.
+
+  This API takes in a `tf.config.PhysicalDevice` returned by
+  `tf.config.list_physical_devices`. It returns a dict with string keys
+  containing various details about the device. Each key is only supported by a
+  subset of devices, so you should not assume the returned dict will have any
+  particular key.
+
+  >>> gpu_devices = tf.config.list_physical_devices('GPU')
+  >>> if gpu_devices:
+  ...   details = tf.config.experimental.get_device_details(gpu_devices[0])
+  ...   details.get('device_name', 'Unknown GPU')
+
+  Currently, details are only returned for GPUs. This function returns an
+  empty dict if passed a non-GPU device.
+
+  The returned dict may have the following keys:
+  * `'device_name'`: A human-readable name of the device as a string, e.g.
+    "Titan V". Unlike `tf.config.PhysicalDevice.name`, this will be the same for
+    multiple devices if each device is the same model. Currently only available
+    for GPUs.
+  * `'compute_capability'`: The
+    [compute capability](https://developer.nvidia.com/cuda-gpus) of the device
+    as a tuple of two ints, in the form `(major_version, minor_version)`. Only
+    available for NVIDIA GPUs
+
+  Note: This is similar to `tf.sysconfig.get_build_info` in that both functions
+  can return information relating to GPUs. However, this function returns
+  run-time information about a specific device (such as a GPU's compute
+  capability), while `tf.sysconfig.get_build_info` returns compile-time
+  information about how TensorFlow was built (such as what version of CUDA
+  TensorFlow was built for).
+
+  Args:
+    device: A `tf.config.PhysicalDevice` returned by
+      `tf.config.list_physical_devices` or `tf.config.get_visible_devices`.
+
+  Returns:
+    A dict with string keys.
+  """
+  return context.context().get_device_details(device)
+
+
 @tf_export('config.get_logical_device_configuration',
            'config.experimental.get_virtual_device_configuration')
 @deprecation.deprecated_endpoints(
@@ -620,7 +671,30 @@ def enable_mlir_bridge():
   context.context().enable_mlir_bridge = True
 
 
+@tf_export('config.experimental.enable_mlir_graph_optimization')
+def enable_mlir_graph_optimization():
+  """Enables experimental MLIR-Based TensorFlow Compiler Optimizations.
+
+  DO NOT USE, DEV AND TESTING ONLY AT THE MOMENT.
+
+  NOTE: MLIR-Based TensorFlow Compiler is under active development and has
+  missing features, please refrain from using. This API exists for development
+  and testing only.
+
+  TensorFlow Compiler Optimizations are responsible general graph level
+  optimizations that in the current stack mostly done by Grappler graph
+  optimizers.
+  """
+  context.context().enable_mlir_graph_optimization = True
+
+
 @tf_export('config.experimental.disable_mlir_bridge')
 def disable_mlir_bridge():
   """Disables experimental MLIR-Based TensorFlow Compiler Bridge."""
   context.context().enable_mlir_bridge = False
+
+
+@tf_export('config.experimental.disable_mlir_graph_optimization')
+def disable_mlir_graph_optimization():
+  """Disables experimental MLIR-Based TensorFlow Compiler Optimizations."""
+  context.context().enable_mlir_graph_optimization = False

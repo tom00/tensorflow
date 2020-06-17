@@ -395,6 +395,13 @@ def tf_proto_library_cc(
         )
 
         native.alias(
+            name = cc_name + "_genproto",
+            actual = name + "_genproto",
+            testonly = testonly,
+            visibility = visibility,
+        )
+
+        native.alias(
             name = cc_name + "_headers_only",
             actual = cc_name,
             testonly = testonly,
@@ -480,9 +487,6 @@ def tf_proto_library_py(
 def tf_jspb_proto_library(**kwargs):
     pass
 
-def tf_nano_proto_library(**kwargs):
-    pass
-
 def tf_proto_library(
         name,
         srcs = [],
@@ -535,25 +539,9 @@ def tf_proto_library(
         visibility = visibility,
     )
 
-# A list of all files under platform matching the pattern in 'files'. In
-# contrast with 'tf_platform_srcs' below, which seletive collects files that
-# must be compiled in the 'default' platform, this is a list of all headers
-# mentioned in the platform/* files.
-def tf_platform_hdrs(files):
-    return native.glob(["*/" + f for f in files])
-
-def tf_platform_srcs(files):
-    base_set = ["default/" + f for f in files]
-    windows_set = base_set + ["windows/" + f for f in files]
-    posix_set = base_set + ["posix/" + f for f in files]
-
-    return select({
-        clean_dep("//tensorflow:windows"): native.glob(windows_set),
-        "//conditions:default": native.glob(posix_set),
-    })
-
 def tf_additional_lib_hdrs():
     return [
+        "//tensorflow/core/platform/default:casts.h",
         "//tensorflow/core/platform/default:context.h",
         "//tensorflow/core/platform/default:cord.h",
         "//tensorflow/core/platform/default:dynamic_annotations.h",
@@ -581,9 +569,6 @@ def tf_additional_lib_hdrs():
         ],
     })
 
-def tf_additional_monitoring_hdrs():
-    return []
-
 def tf_additional_env_hdrs():
     return []
 
@@ -592,8 +577,8 @@ def tf_additional_all_protos():
 
 def tf_protos_all_impl():
     return [
-        clean_dep("//tensorflow/core:autotuning_proto_cc_impl"),
-        clean_dep("//tensorflow/core:conv_autotuning_proto_cc_impl"),
+        clean_dep("//tensorflow/core/protobuf:autotuning_proto_cc_impl"),
+        clean_dep("//tensorflow/core/protobuf:conv_autotuning_proto_cc_impl"),
         clean_dep("//tensorflow/core:protos_all_cc_impl"),
     ]
 
@@ -604,7 +589,10 @@ def tf_protos_all():
     )
 
 def tf_protos_profiler_impl():
-    return [clean_dep("//tensorflow/core/profiler/protobuf:xplane_proto_cc_impl")]
+    return [
+        clean_dep("//tensorflow/core/profiler/protobuf:xplane_proto_cc_impl"),
+        clean_dep("//tensorflow/core/profiler:profiler_options_proto_cc_impl"),
+    ]
 
 def tf_protos_grappler_impl():
     return [clean_dep("//tensorflow/core/grappler/costs:op_performance_data_cc_impl")]
@@ -619,9 +607,6 @@ def tf_additional_device_tracer_srcs():
     return ["device_tracer.cc"]
 
 def tf_additional_cupti_utils_cuda_deps():
-    return []
-
-def tf_additional_cupti_test_flags():
     return []
 
 def tf_additional_test_deps():
@@ -653,7 +638,9 @@ def tf_additional_core_deps():
         clean_dep("//tensorflow:android"): [],
         clean_dep("//tensorflow:ios"): [],
         clean_dep("//tensorflow:linux_s390x"): [],
-        clean_dep("//tensorflow:windows"): [],
+        clean_dep("//tensorflow:windows"): [
+            "//tensorflow/core/platform/cloud:gcs_file_system",
+        ],
         clean_dep("//tensorflow:no_gcp_support"): [],
         "//conditions:default": [
             "//tensorflow/core/platform/cloud:gcs_file_system",
@@ -671,7 +658,9 @@ def tf_additional_core_deps():
         clean_dep("//tensorflow:android"): [],
         clean_dep("//tensorflow:ios"): [],
         clean_dep("//tensorflow:linux_s390x"): [],
-        clean_dep("//tensorflow:windows"): [],
+        clean_dep("//tensorflow:windows"): [
+            clean_dep("//tensorflow/core/platform/s3:s3_file_system"),
+        ],
         clean_dep("//tensorflow:no_aws_support"): [],
         "//conditions:default": [
             clean_dep("//tensorflow/core/platform/s3:s3_file_system"),
@@ -738,6 +727,9 @@ def tf_protobuf_deps():
         otherwise = [clean_dep("@com_google_protobuf//:protobuf_headers")],
     )
 
+def tf_portable_proto_lib():
+    return ["//tensorflow/core:protos_all_cc_impl"]
+
 def tf_protobuf_compiler_deps():
     return if_static(
         [
@@ -745,3 +737,45 @@ def tf_protobuf_compiler_deps():
         ],
         otherwise = [clean_dep("@com_google_protobuf//:protobuf_headers")],
     )
+
+def tf_windows_aware_platform_deps(name):
+    return select({
+        "//tensorflow:windows": [
+            "//tensorflow/core/platform/windows:" + name,
+        ],
+        "//conditions:default": [
+            "//tensorflow/core/platform/default:" + name,
+        ],
+    })
+
+def tf_platform_deps(name, platform_dir = "//tensorflow/core/platform/"):
+    return [platform_dir + "default:" + name]
+
+def tf_platform_alias(name, platform_dir = "//tensorflow/core/platform/"):
+    return [platform_dir + "default:" + name]
+
+def tf_logging_deps():
+    return ["//tensorflow/core/platform/default:logging"]
+
+def tf_resource_deps():
+    return ["//tensorflow/core/platform/default:resource"]
+
+def tf_portable_deps_no_runtime():
+    return [
+        "//third_party/eigen3",
+        "@double_conversion//:double-conversion",
+        "@nsync//:nsync_cpp",
+        "@com_googlesource_code_re2//:re2",
+        "@farmhash_archive//:farmhash",
+    ]
+
+def tf_google_mobile_srcs_no_runtime():
+    return []
+
+def tf_google_mobile_srcs_only_runtime():
+    return []
+
+def if_llvm_aarch64_available(then, otherwise = []):
+    # TODO(b/...): The TF XLA build fails when adding a dependency on
+    # @llvm/llvm-project/llvm:aarch64_target.
+    return otherwise

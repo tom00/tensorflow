@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Python command line interface for running TOCO."""
+"""Python command line interface for converting TF models to TFLite models."""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -65,11 +65,13 @@ def _parse_inference_type(value, flag):
     return lite_constants.FLOAT
   if value == "QUANTIZED_UINT8":
     return lite_constants.QUANTIZED_UINT8
+  if value == "INT8":
+    return lite_constants.INT8
   raise ValueError("Unsupported value for --{0}. Only FLOAT and "
                    "QUANTIZED_UINT8 are supported.".format(flag))
 
 
-def _get_toco_converter(flags):
+def _get_tflite_converter(flags):
   """Makes a TFLiteConverter object based on the flags provided.
 
   Args:
@@ -127,7 +129,7 @@ def _convert_tf1_model(flags):
     ValueError: Invalid flags.
   """
   # Create converter.
-  converter = _get_toco_converter(flags)
+  converter = _get_tflite_converter(flags)
   if flags.inference_type:
     converter.inference_type = _parse_inference_type(flags.inference_type,
                                                      "inference_type")
@@ -205,8 +207,8 @@ def _convert_tf1_model(flags):
   if flags.conversion_summary_dir:
     converter.conversion_summary_dir = flags.conversion_summary_dir
 
-  if flags.experimental_new_converter:
-    converter.experimental_new_converter = True
+  if flags.experimental_new_converter is not None:
+    converter.experimental_new_converter = flags.experimental_new_converter
 
   # Convert model.
   output_data = converter.convert()
@@ -230,8 +232,8 @@ def _convert_tf2_model(flags):
     model = keras.models.load_model(flags.keras_model_file)
     converter = lite.TFLiteConverterV2.from_keras_model(model)
 
-  if flags.experimental_new_converter:
-    converter.experimental_new_converter = True
+  if flags.experimental_new_converter is not None:
+    converter.experimental_new_converter = flags.experimental_new_converter
 
   # Convert the model.
   tflite_model = converter.convert()
@@ -352,12 +354,12 @@ def _get_tf1_flags(parser):
   parser.add_argument(
       "--inference_type",
       type=str.upper,
-      choices=["FLOAT", "QUANTIZED_UINT8"],
+      choices=["FLOAT", "QUANTIZED_UINT8", "INT8"],
       help="Target data type of real-number arrays in the output file.")
   parser.add_argument(
       "--inference_input_type",
       type=str.upper,
-      choices=["FLOAT", "QUANTIZED_UINT8"],
+      choices=["FLOAT", "QUANTIZED_UINT8", "INT8"],
       help=("Target data type of real-number input arrays. Allows for a "
             "different type for input arrays in the case of quantization."))
 
@@ -500,10 +502,10 @@ def _get_tf1_flags(parser):
   parser.add_argument(
       "--conversion_summary_dir",
       type=str,
-      help=("Full filepath to store the conversion logs, which inclues graphviz"
-            " of the model before/after the conversion, an HTML report and the "
-            "conversion proto buffers. This will only be generated when passing"
-            " --experimental_new_converter"))
+      help=("Full filepath to store the conversion logs, which includes "
+            "graphviz of the model before/after the conversion, an HTML report "
+            "and the conversion proto buffers. This will only be generated "
+            "when passing --experimental_new_converter"))
 
 
 def _get_tf2_flags(parser):
@@ -587,12 +589,12 @@ def _get_parser(use_v2_converter):
       action=_ParseExperimentalNewConverter,
       nargs="?",
       help=("Experimental flag, subject to change. Enables MLIR-based "
-            "conversion instead of TOCO conversion."))
+            "conversion instead of TOCO conversion. (default True)"))
   return parser
 
 
 def run_main(_):
-  """Main in toco_convert.py."""
+  """Main in tflite_convert.py."""
   use_v2_converter = tf2.enabled()
   parser = _get_parser(use_v2_converter)
   tflite_flags, unparsed = parser.parse_known_args(args=sys.argv[1:])

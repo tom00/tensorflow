@@ -52,7 +52,11 @@ EOF
         ],
     )
 
-    srcs = [android_library + ".aar", name + "_dummy_app_for_so_unsigned.apk"]
+    srcs = [
+        android_library + ".aar",
+        name + "_dummy_app_for_so_unsigned.apk",
+        "//:LICENSE",
+    ]
 
     cmd = """
 cp $(location {0}.aar) $(location :{1}.aar)
@@ -62,6 +66,8 @@ cd $$(mktemp -d)
 unzip $$origdir/$(location :{1}_dummy_app_for_so_unsigned.apk) "lib/*"
 cp -r lib jni
 zip -r $$origdir/$(location :{1}.aar) jni/*/*.so
+cp $$origdir/$(location //:LICENSE) ./
+zip $$origdir/$(location :{1}.aar) LICENSE
 """.format(android_library, name)
 
     if headers:
@@ -72,12 +78,12 @@ zip -r $$origdir/$(location :{1}.aar) jni/*/*.so
         for src in headers:
             if flatten_headers:
                 cmd += """
-                    cp -rL $$origdir/$(location {0}) headers/$$(basename $(location {0}))
+                    cp -RL $$origdir/$(location {0}) headers/$$(basename $(location {0}))
                 """.format(src)
             else:
                 cmd += """
                     mkdir -p headers/$$(dirname $(location {0}))
-                    cp -rL $$origdir/$(location {0}) headers/$(location {0})
+                    cp -RL $$origdir/$(location {0}) headers/$(location {0})
                 """.format(src)
         cmd += "zip -r $$origdir/$(location :{0}.aar) headers".format(name)
 
